@@ -1063,11 +1063,129 @@ body {
   border-radius: 8px;
   transition: box-shadow 0.3s ease;
 }
-
 .sample-editor--located {
   box-shadow: 0 0 0 2px var(--accent), 0 0 18px rgba(79, 140, 255, 0.35);
 }
 
 .sample-editor--located .code-input {
   border-color: var(--accent);
+}
+
+/* ---------- event-variant contract ---------- */
+
+.variant-panel .panel-label {
+  margin-top: 4px;
+}
+
+.variant-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  flex-wrap: wrap;
+}
+
+.variant-pointer-input {
+  flex: 1;
+  min-width: 220px;
+}
+
+.variant-tools {
+  margin-left: auto;
+}
+
+.variant-excluded {
+  margin-top: 12px;
+}
+
+.variant-excluded__list {
+  list-style: none;
+  margin: 6px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  max-height: 26vh;
+  overflow-y: auto;
+}
+
+.variant-excluded__item {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  background: rgba(242, 109, 109, 0.07);
+  border: 1px solid rgba(242, 109, 109, 0.3);
+  border-radius: 6px;
+  padding: 6px 10px;
+  font-size: 12.5px;
+}
+
+.variant-excluded__reason {
+  color: var(--muted);
+}
+
+.variant-branches {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.variant-branch {
+  background: var(--panel-2);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent);
+  border-radius: 8px;
+}
+
+.variant-branch__head {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  background: none;
+  border: none;
+  color: var(--text);
+  padding: 8px 10px;
+  cursor: pointer;
+  font-size: 13px;
+  text-align: left;
+  flex-wrap: wrap;
+}
+
+.variant-branch__head:hover {
+  background: rgba(79, 140, 255, 0.06);
+  border-radius: 8px;
+}
+
+.variant-branch__const {
+  font-family: var(--mono);
+  font-size: 12.5px;
+}
+
+.variant-branch__const code {
+  color: #ffd166;
+  font-weight: 600;
+}
+
+.variant-branch__count {
+  font-size: 12px;
+  color: var(--muted);
+}
+
+.variant-branch__indexes {
+  margin-left: auto;
+  font-family: var(--mono);
+  font-size: 11.5px;
+  color: var(--muted);
+}
+
+.variant-branch__body {
+  padding: 4px 12px 12px 24px;
+  border-top: 1px solid var(--border);
+}
+
+.validate-source {
+  margin-bottom: 10px;
 }

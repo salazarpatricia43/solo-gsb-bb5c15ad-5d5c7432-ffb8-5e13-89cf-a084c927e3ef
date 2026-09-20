@@ -8,6 +8,7 @@ const { compareSchemas, PERSPECTIVES } = require("./diff");
 const { generateCounterexample } = require("./counterexample");
 const { scanSamples } = require("./scan");
 const { analyzeContribution } = require("./contribution");
+const { buildVariants } = require("./variant");
 
 function createApp() {
   const app = express();
@@ -126,6 +127,30 @@ function createApp() {
     const { samples } = req.body || {};
     try {
       res.json(analyzeContribution(samples));
+    } catch (err) {
+      const status = err.status && err.status < 500 ? err.status : 500;
+      res.status(status).json({ error: status === 500 ? "Internal server error" : err.message });
+    }
+  });
+
+  // Event-variant contract: group samples by a discriminator value found via
+  // a JSON Pointer, infer one branch per group and wrap them in `oneOf`.
+  // Excluded samples (missing field / object|array|null value / malformed
+  // pointer escape) are returned with their index and reason; fewer than two
+  // valid groups is a 400.
+  app.post("/api/variants", (req, res) => {
+    const { samples, pointer } = req.body || {};
+    if (typeof pointer !== "string") {
+      return res
+        .status(400)
+        .json({ error: "Request body must contain a 'pointer' string (RFC 6901, e.g. /type)." });
+    }
+    try {
+      const result = buildVariants({ samples, pointer });
+      if (result.rejected) {
+        return res.status(400).json(result);
+      }
+      res.json(result);
     } catch (err) {
       const status = err.status && err.status < 500 ? err.status : 500;
       res.status(status).json({ error: status === 500 ? "Internal server error" : err.message });

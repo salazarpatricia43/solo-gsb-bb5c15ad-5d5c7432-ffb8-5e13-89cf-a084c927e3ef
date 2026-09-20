@@ -4,6 +4,8 @@
 自动处理字段缺失、`null`、异构数组与类型冲突，并在树形视图中标注每条规则对应的样本路径；
 支持一键复制 Schema、校验新样本并按 **JSON Pointer** 展示错误；
 用**样本贡献度**分析逐条评估样本对契约的影响（关键/冗余，附受影响的规则 Pointer）；
+还可按一个 **JSON Pointer 判别字段**生成**事件变体契约**（按判别值分组、各组分别归纳为
+带 `const` 的 `oneOf` 分支）；
 还可把归纳结果设为基线，对比新旧两版 Schema 的**契约演进**（破坏性/兼容判定），
 为每条破坏性变更加载**反例样本**（递归构造最小 JSON 并用 Ajv 双侧校验），
 用**样本影响扫描**把历史样本集按基线/当前 Schema 逐条校验并归类（两版均通过、仅基线通过、
@@ -61,6 +63,24 @@ docker compose up --build
 - **发布门禁**：在演进页填写基线版本（当前 SemVer）与目标版本（新版 SemVer），门禁复用当前
   `/api/diff` 差异汇总即时给出「允许/阻止发布」结论，展示实际升级类型、触发结论的变更数量与
   原因，并可复制包含版本、视角、汇总与结论的 JSON 报告；切换视角或修改版本号都会即时重算。
+- **事件变体契约**：在「⑤ 事件变体」页填写一个 **JSON Pointer（RFC 6901）**作为判别字段，
+  系统读取每条样本该位置的**字符串、数字或布尔值**并按值分组，每组分别复用现有归纳引擎生成一个
+  分支，最终包成 `oneOf`。每个分支都把判别字段约束为对应的 `const`（判别字段必然进入该分支
+  `required`），其余字段**只有在该组每条样本中都存在时才进入 `required`**。结果区展示分组数量、
+  参与/剔除样本数、每个分支的判别值（含类型）、样本序号与分支 Schema（树形或完整 JSON），
+  可一键复制完整结果，或「到校验页验证」直接在「③ 校验新样本」中用该 oneOf 契约校验新样本。
+  详见下文「事件变体契约：规则与剔除原因」。
+
+## 事件变体契约：操作说明
+
+1. 在左侧粘贴样本后（无需先做普通归纳），切到「**⑤ 事件变体**」标签页。
+2. 在「判别字段」框填写 JSON Pointer（默认 `/type`；支持 `/meta/event`、`/tags/0`，
+   键名含 `/` 或 `~` 时按 RFC 6901 转义为 `~1`/`~0`；留空表示对根样本本身分组）。
+3. 点击「生成事件变体契约」：查看分组数量、参与/剔除样本数；剔除样本按序号列出具体原因。
+4. 展开分支卡片查看该组 Schema（判别字段为 `const`，共同字段才 `required`），或切到
+   「完整 JSON」查看并一键复制完整 oneOf 结果。
+5. 点击「到校验页验证」跳转「③ 校验新样本」，粘贴新样本即可按该 oneOf 契约校验。
+6. 修改左侧任何样本后，上次变体结果自动失效，需重新生成。
 
 ## 契约演进：操作说明
 
@@ -156,6 +176,46 @@ Schema，再**逐条移除一条样本**重新归纳，比较两份 Schema 的�
 ASCII 比较）；构建元数据（`+build`）可解析但不参与比较。结论区展示实际升级类型、门禁要求、
 触发结论的变更数量与原因；「复制门禁报告」生成包含版本、视角、差异汇总与结论的 JSON。
 
+## 事件变体契约：规则与剔除原因
+
+入口：**http://localhost:8080** 页面顶部右侧的「**⑤ 事件变体**」标签页（与样本输入同页），
+也可直接调用 `POST /api/variants`。在判别字段输入框填入 JSON Pointer（RFC 6901，如 `/type`、
+`/meta/event`、`/tags/0`；留空表示样本根本身就是判别值），点击「生成事件变体契约」。
+
+处理流程与规则：
+
+| 步骤 | 规则 |
+| --- | --- |
+| 读取判别值 | 按 Pointer 逐级取值；对象按键名、数组按**非负整数下标**（`0` 或不以 `0` 开头的多位数；`-` 不指向现有元素） |
+| 分组 | 判别值仅支持**字符串 / 数字 / 布尔值**，按 JSON 相等性分组（`1` 与 `1.0` 同组）；分支按首次出现顺序排列 |
+| 分支归纳 | 每个分组独立调用现有归纳引擎，故字段缺失、`null` 联合、异构数组、类型冲突等规则与 `/api/infer` 完全一致 |
+| 判别字段约束 | 在判别字段对应的子 Schema 上写入 `const: <该组判别值>`；判别字段在该组必然存在，因此同时位于该分支 `required` |
+| 其余必填字段 | **仅该组所有样本共同存在的字段**进入分支 `required`；某字段只在部分样本出现则为该分支可选 |
+| 产出 | `{ "$schema": ..., "oneOf": [<分支1>, <分支2>, ...] }`，生成后用 Ajv 编译自检 |
+| 拒绝产出 | 有效分组**少于 2 个**时返回 `400`（仍会带上已形成的分组与剔除明细，便于排查） |
+
+不参与生成的样本会**按样本序号（从 1 开始展示）逐条列出原因**：
+
+| 情形 | 原因示例 |
+| --- | --- |
+| 判别字段缺失（路径上缺键） | `判别字段缺失：(root) 处对象没有键 "type"。` |
+| 数组下标越界 | `判别字段缺失：数组下标 0 越界（/tags 处数组长度为 0）。` |
+| 路径段不是合法数组下标 | `路径段 "01" 不是合法数组下标（须为 0 或不以 0 开头的非负整数…）。` |
+| 取值为 `null` / 对象 / 数组 | `判别值为 null（对象/数组）：判别字段只支持字符串、数字或布尔值。` |
+| 路径中途遇到标量/null 无法继续 | `路径 /meta 处是数字，无法继续按 "event" 取值。` |
+| Pointer 转义非法 | `JSON Pointer 转义非法：段 "a~2b" 中的 ~ 后只能是 0 或 1。`（此时全部样本剔除，接口 400） |
+
+- **Pointer 转义**：严格遵循 RFC 6901，键名中的 `~` 写作 `~0`、`/` 写作 `~1`；`~2`、结尾的
+  `~` 等均为非法。Pointer 必须为空（根节点）或以 `/` 开头。
+- **结果界面**：顶部汇总「分组 N」「参与样本 M/总数」；剔除样本以红色列表逐条展示序号与原因；
+  每个分支卡片展示 `const = <判别值>`、判别值类型、样本条数与样本序号（`#1, #2`…），展开后为
+  该分支 Schema 的树形视图（样本路径标注已回填为**原始样本序号**）；可切换「完整 JSON」查看
+  oneOf 全貌并一键复制。
+- **校验新样本**：点「到校验页验证」即携带 oneOf 契约跳到「③ 校验新样本」，页内可在
+  「事件变体 oneOf 契约 / 普通归纳 Schema」之间切换；未知判别值会报 `const` + `oneOf` 错误。
+- **失效与限制**：任何样本修改都会让上一次变体结果立即失效（提示重新生成）；单次最多 **200**
+  条样本，超限前后端都会拦截。
+
 ## 本地开发
 
 ```bash
@@ -169,7 +229,7 @@ npm run dev:client   # 前端 http://localhost:5173（/api 代理到 8080）
 ## 测试
 
 ```bash
-npm test             # node:test，覆盖归纳引擎、契约比较器、反例生成器、样本影响扫描、样本贡献度、HTTP API 与发布门禁（105 项）
+npm test             # node:test，覆盖归纳引擎、契约比较器、反例生成器、样本影响扫描、样本贡献度、事件变体契约、HTTP API 与发布门禁（125 项）
 ```
 
 ## API
@@ -183,6 +243,7 @@ npm test             # node:test，覆盖归纳引擎、契约比较器、反例
 | POST | `/api/counterexample` | `{ oldSchema, newSchema, perspective, kind, pointer }` | `{ constructible, sample?, oldResult: { valid, errors }, newResult: { valid, errors }, reason? }` |
 | POST | `/api/scan` | `{ oldSchema, newSchema, samples: [<any>, ...] }`（≤ 200 条） | `{ total, summary: { both, baselineOnly, currentOnly, neither }, samples: [{ index, category, baseline: { valid, errors }, current: { valid, errors } }] }` |
 | POST | `/api/contribution` | `{ samples: [<any>, ...] }`（1–50 条） | `{ total, summary: { critical, redundant }, samples: [{ index, verdict, affectedPointers }] }` |
+| POST | `/api/variants` | `{ samples: [<any>, ...], pointer: "/type" }`（≤ 200 条） | `200 { rejected:false, pointer, total, usedCount, excludedCount, groupCount, excluded:[{index,reason}], groups:[{value,sampleCount,indexes,schema,paths}], schema:{oneOf} }`；有效分组少于 2 个 / Pointer 非法时 `400`（响应体仍含 `groups`、`excluded` 等明细） |
 
 示例：
 
@@ -230,6 +291,23 @@ curl -X POST http://localhost:8080/api/contribution \
 #        { "index": 2, "verdict": "critical",  "affectedPointers": ["/properties/tag"] } ] }
 ```
 
+按判别字段生成事件变体 oneOf 契约（缺失/非法判别值的样本进入 `excluded`）：
+
+```bash
+curl -X POST http://localhost:8080/api/variants \
+  -H 'Content-Type: application/json' \
+  -d '{"pointer":"/type","samples":[{"type":"user","id":1,"email":"a@x.com"},{"type":"user","id":2},{"type":"guest","id":3},{"id":4}]}'
+# -> { "rejected": false, "total": 4, "usedCount": 3, "excludedCount": 1, "groupCount": 2,
+#      "excluded": [ { "index": 3, "reason": "判别字段缺失：(root) 处对象没有键 \"type\"。" } ],
+#      "groups": [
+#        { "value": "user",  "sampleCount": 2, "indexes": [0, 1], "schema": { ... "const": "user"  } },
+#        { "value": "guest", "sampleCount": 1, "indexes": [2],    "schema": { ... "const": "guest" } } ],
+#      "schema": { "$schema": "https://json-schema.org/draft/2020-12/schema", "oneOf": [ ... ] } }
+```
+
+> 有效分组少于 2 个或 Pointer 非法时返回 `400`，响应体仍带 `rejected:true`、`error`、
+> `groups`、`excluded` 等字段，便于界面展示每条样本被剔除的原因。
+
 ## 目录结构
 
 ```
@@ -242,7 +320,8 @@ curl -X POST http://localhost:8080/api/contribution \
 │   ├── counterexample.js   # 破坏性反例生成器（递归构造最小 JSON + Ajv 双侧校验）
 │   ├── scan.js             # 样本影响扫描器（Ajv 双侧逐条校验 + 四分类，单次上限 200 条）
 │   ├── contribution.js     # 样本贡献度分析（留一法重新归纳 + 规范化规则差异判定，单次上限 50 条）
-│   ├── app.js              # Express（/api/infer、/api/validate、/api/diff、/api/counterexample、/api/scan、/api/contribution、静态托管）
+│   ├── variant.js          # 事件变体契约（RFC 6901 判别字段分组 + 各组归纳注入 const + oneOf，单次上限 200 条）
+│   ├── app.js              # Express（/api/infer、/api/validate、/api/diff、/api/counterexample、/api/scan、/api/contribution、/api/variants、静态托管）
 │   ├── index.js            # 入口：监听 PORT（默认 8080）
 │   └── test/               # node:test 单元与 API 测试
 └── client/
@@ -256,6 +335,7 @@ curl -X POST http://localhost:8080/api/contribution \
         ├── components/CounterexamplePanel.jsx # 反例：样本格式化展示、双侧校验结果、复制按钮
         ├── components/SampleScanPanel.jsx  # 样本影响扫描：数组输入、四分类汇总、单条双侧错误展开
         ├── components/ContributionPanel.jsx # 样本贡献度：留一法分析入口、关键/冗余汇总筛选、定位原样本
+        ├── components/VariantPanel.jsx  # 事件变体：Pointer 判别字段输入、剔除原因、oneOf 分支 Schema、复制/去校验
         ├── components/ReleaseGate.jsx   # 发布门禁卡片：版本输入、放行结论、报告复制
         └── components/SampleEditor.jsx  # 样本编辑器（实时 JSON 校验）
 ```

@@ -2,12 +2,18 @@ import { useState } from "react";
 import { validateSample } from "../api";
 import { DEFAULT_VALIDATE_SAMPLE } from "../defaultSamples";
 
-export default function ValidatePanel({ schema }) {
+export default function ValidatePanel({ schema, variantSchema }) {
   const [text, setText] = useState(DEFAULT_VALIDATE_SAMPLE);
   const [parseError, setParseError] = useState(null);
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [busy, setBusy] = useState(false);
+  // When the user jumps here from the event-variant tab with a oneOf schema,
+  // validate against it; otherwise fall back to the plain inferred schema.
+  const [useVariant, setUseVariant] = useState(Boolean(variantSchema));
+
+  const hasVariant = Boolean(variantSchema);
+  const activeSchema = hasVariant && useVariant ? variantSchema : schema;
 
   async function runValidate() {
     setError(null);
@@ -22,7 +28,7 @@ export default function ValidatePanel({ schema }) {
     }
     setBusy(true);
     try {
-      setResult(await validateSample(schema, sample));
+      setResult(await validateSample(activeSchema, sample));
     } catch (e) {
       setError(e.message);
     } finally {
@@ -30,12 +36,43 @@ export default function ValidatePanel({ schema }) {
     }
   }
 
-  if (!schema) {
+  if (!schema && !variantSchema) {
     return <div className="empty-hint">请先在左侧归纳出 Schema，再校验新样本。</div>;
   }
 
   return (
     <div className="validate-panel">
+      {hasVariant && (
+        <div className="perspective-toggle validate-source">
+          <button
+            type="button"
+            className={useVariant ? "active" : ""}
+            onClick={() => {
+              setUseVariant(true);
+              setResult(null);
+            }}
+          >
+            事件变体 oneOf 契约
+          </button>
+          <button
+            type="button"
+            className={!useVariant ? "active" : ""}
+            onClick={() => {
+              setUseVariant(false);
+              setResult(null);
+            }}
+            disabled={!schema}
+          >
+            普通归纳 Schema
+          </button>
+        </div>
+      )}
+      {hasVariant && !schema && (
+        <div className="panel__meta panel__meta--block">
+          当前仅有事件变体契约（尚未做普通归纳），校验将基于该 oneOf Schema。
+        </div>
+      )}
+
       <div className="validate-panel__editor">
         <div className="panel-label">待校验样本</div>
         <textarea

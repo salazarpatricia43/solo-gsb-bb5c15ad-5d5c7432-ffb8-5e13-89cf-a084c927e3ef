@@ -1,4 +1,4 @@
-async function request(path, body) {
+async function request(path, body, { raw = false } = {}) {
   const res = await fetch(path, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -10,6 +10,9 @@ async function request(path, body) {
   } catch {
     throw new Error(`服务响应异常（HTTP ${res.status}）`);
   }
+  // Some endpoints (e.g. /api/variants) return an informative 400 payload
+  // (excluded samples, partial groups) the UI renders instead of throwing.
+  if (raw) return { ok: res.ok, status: res.status, data };
   if (!res.ok) throw new Error(data.error || `请求失败（HTTP ${res.status}）`);
   return data;
 }
@@ -36,4 +39,9 @@ export function scanSamples(oldSchema, newSchema, samples) {
 
 export function analyzeContribution(samples) {
   return request("/api/contribution", { samples });
+}
+
+export function buildVariants(samples, pointer) {
+  // 400 payloads still carry `groups`/`excluded` for the UI.
+  return request("/api/variants", { samples, pointer }, { raw: true });
 }

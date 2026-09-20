@@ -382,6 +382,121 @@ test("POST /api/contribution validates its input", async () => {
   assert.equal(atLimit.data.total, 50);
 });
 
+test("POST /api/variants builds a oneOf contract grouped by the discriminator", async () => {
+  const { status, data } = await post("/api/variants", {
+    pointer: "/type",
+    samples: [
+      { type: "user", id: 1, email: "a@x.com" },
+      { type: "user", id: 2, email: "b@x.com" },
+      { type: "guest", id: 3 },
+    ],
+  });
+  assert.equal(status, 200);
+  assert.equal(data.rejected, false);
+  assert.equal(data.total, 3);
+  assert.equal(data.usedCount, 3);
+  assert.equal(data.excludedCount, 0);
+  assert.equal(data.groupCount, 2);
+  assert.deepEqual(data.excluded, []);
+  assert.deepEqual(
+    data.groups.map((g) => [g.value, g.sampleCount]),
+    [
+      ["user", 2],
+      ["guest", 1],
+    ]
+  );
+  assert.equal(data.schema.oneOf.length, 2);
+  assert.equal(data.schema.$schema, "https://json-schema.org/draft/2020-12/schema");
+  assert.equal(data.schema.oneOf[0].properties.type.const, "user");
+  assert.equal(data.schema.oneOf[1].properties.type.const, "guest");
+  // Generated contract is immediately usable on the validate endpoint.
+  const ok = await post("/api/validate", {
+    schema: data.schema,
+    sample: { type: "guest", id: 9 },
+  });
+  assert.equal(ok.data.valid, true);
+  const bad = await post("/api/validate", {
+    schema: data.schema,
+    sample: { type: "admin", id: 9 },
+  });
+  assert.equal(bad.data.valid, false);
+});
+
+test("POST /api/variants reports excluded samples with index and reason", async () => {
+  const { status, data } = await post("/api/variants", {
+    pointer: "/type",
+    samples: [
+      { type: "user", id: 1 },
+      { id: 2 },
+      { type: null, id: 3 },
+      { type: { x: 1 }, id: 4 },
+      { type: ["g"], id: 5 },
+      { type: "guest", id: 6 },
+    ],
+  });
+  assert.equal(status, 200);
+  assert.equal(data.groupCount, 2);
+  assert.equal(data.usedCount, 2);
+  assert.equal(data.excludedCount, 4);
+  assert.deepEqual(
+    data.excluded.map((e) => e.index),
+    [1, 2, 3, 4]
+  );
+  for (const item of data.excluded) assert.ok(item.reason.length > 0);
+});
+
+test("POST /api/variants rejects fewer than two groups with 400 but keeps details", async () => {
+  const { status, data } = await post("/api/variants", {
+    pointer: "/type",
+    samples: [{ type: "user", id: 1 }, { id: 2 }, { type: null }],
+  });
+  assert.equal(status, 400);
+  assert.equal(data.rejected, true);
+  assert.equal(data.groupCount, 1);
+  assert.equal(data.excludedCount, 2);
+  assert.match(data.error, /至少需要 2/);
+  assert.equal(data.groups[0].schema.properties.type.const, "user");
+
+  const none = await post("/api/variants", { pointer: "/type", samples: [{ id: 1 }] });
+  assert.equal(none.status, 400);
+  assert.equal(none.data.groupCount, 0);
+});
+
+test("POST /api/variants rejects malformed pointer escapes for every sample", async () => {
+  const { status, data } = await post("/api/variants", {
+    pointer: "/a~2b",
+    samples: [{ t: "x" }, { t: "y" }],
+  });
+  assert.equal(status, 400);
+  assert.equal(data.excludedCount, 2);
+  assert.match(data.error, /转义非法/);
+  assert.deepEqual(
+    data.excluded.map((e) => e.index),
+    [0, 1]
+  );
+});
+
+test("POST /api/variants validates its input", async () => {
+  const noPointer = await post("/api/variants", { samples: [{ t: 1 }] });
+  assert.equal(noPointer.status, 400);
+  assert.match(noPointer.data.error, /'pointer' string/);
+
+  const missing = await post("/api/variants", { pointer: "/t" });
+  assert.equal(missing.status, 400);
+  assert.match(missing.data.error, /samples/);
+
+  const empty = await post("/api/variants", { pointer: "/t", samples: [] });
+  assert.equal(empty.status, 400);
+  assert.match(empty.data.error, /samples/);
+
+  const tooMany = await post("/api/variants", {
+    pointer: "/t",
+    samples: Array.from({ length: 201 }, () => ({ t: "a" })),
+  });
+  assert.equal(tooMany.status, 400);
+  assert.match(tooMany.data.error, /200/);
+});
+
 test("malformed JSON body gets a JSON 400", async () => {
   const res = await fetch(`${base}/api/infer`, {
     method: "POST",
