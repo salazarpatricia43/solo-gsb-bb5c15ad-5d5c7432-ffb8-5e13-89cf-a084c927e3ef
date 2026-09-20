@@ -8,6 +8,7 @@ const { compareSchemas, PERSPECTIVES } = require("./diff");
 const { generateCounterexample } = require("./counterexample");
 const { scanSamples } = require("./scan");
 const { analyzeContribution } = require("./contribution");
+const { buildVariantContract } = require("./variant");
 
 function createApp() {
   const app = express();
@@ -129,6 +130,23 @@ function createApp() {
     } catch (err) {
       const status = err.status && err.status < 500 ? err.status : 500;
       res.status(status).json({ error: status === 500 ? "Internal server error" : err.message });
+    }
+  });
+
+  // Event variant contract: group samples by the value at a discriminator
+  // JSON Pointer, infer one branch per group and combine them into `oneOf`.
+  // Refusals (illegal pointer, fewer than two groups) still carry the
+  // grouping analysis (skipped samples with reasons, group summaries).
+  app.post("/api/variant", (req, res) => {
+    const { samples, pointer } = req.body || {};
+    try {
+      res.json(buildVariantContract({ samples, pointer }));
+    } catch (err) {
+      const status = err.status && err.status < 500 ? err.status : 500;
+      res.status(status).json({
+        error: status === 500 ? "Internal server error" : err.message,
+        ...(err.details || {}),
+      });
     }
   });
 

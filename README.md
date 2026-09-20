@@ -8,7 +8,9 @@
 为每条破坏性变更加载**反例样本**（递归构造最小 JSON 并用 Ajv 双侧校验），
 用**样本影响扫描**把历史样本集按基线/当前 Schema 逐条校验并归类（两版均通过、仅基线通过、
 仅当前通过、两版均失败），
-并通过**发布门禁**结合基线/目标 SemVer 给出允许或阻止发布的结论与可复制报告。
+通过**发布门禁**结合基线/目标 SemVer 给出允许或阻止发布的结论与可复制报告，
+并可按**判别字段**把样本分组生成**事件变体契约**（每组复用归纳引擎生成一个 `oneOf` 分支，
+分支内判别字段固定为对应 `const`）。
 
 技术栈：Node.js · Express · React（Vite）· Ajv（draft 2020-12）
 
@@ -61,6 +63,12 @@ docker compose up --build
 - **发布门禁**：在演进页填写基线版本（当前 SemVer）与目标版本（新版 SemVer），门禁复用当前
   `/api/diff` 差异汇总即时给出「允许/阻止发布」结论，展示实际升级类型、触发结论的变更数量与
   原因，并可复制包含版本、视角、汇总与结论的 JSON 报告；切换视角或修改版本号都会即时重算。
+- **事件变体契约**：在「⑤ 事件变体」页填写判别字段的 JSON Pointer（如 `/type`），系统读取每条
+  样本该位置的字符串/数字/布尔值并按值分组，每组复用归纳引擎生成一个分支，最终合并为带 `oneOf`
+  的 JSON Schema；每个分支把判别字段约束为对应 `const`，且仅组内共同存在的字段进入 `required`。
+  判别字段缺失、值为对象/数组/null 或 Pointer 转义非法的样本不参与生成，并按样本序号列出原因；
+  有效分组不足 2 个时拒绝产出。结果区展示分组数量、样本数与各分支 Schema，可一键复制完整契约，
+  并可一键接入「③ 校验新样本」验证新样本。
 
 ## 契约演进：操作说明
 
@@ -156,6 +164,42 @@ Schema，再**逐条移除一条样本**重新归纳，比较两份 Schema 的�
 ASCII 比较）；构建元数据（`+build`）可解析但不参与比较。结论区展示实际升级类型、门禁要求、
 触发结论的变更数量与原因；「复制门禁报告」生成包含版本、视角、差异汇总与结论的 JSON。
 
+## 事件变体契约：规则与入口
+
+入口：**http://localhost:8080** 页面的「⑤ 事件变体」页签，或直接调用 `POST /api/variant`。
+适合同一接口下有多种事件形态的场景（如 `{"type": "created", ...}` 与 `{"type": "deleted", ...}`）：
+填写判别字段的 JSON Pointer 后点击「生成事件变体契约」，系统按该字段的取值把样本分组，
+每组复用归纳引擎生成一个分支 Schema，最终合并为一份带 `oneOf` 的契约。
+
+**判别 Pointer（RFC 6901）**：
+
+- 须以 `/` 开头，逐段按**对象属性**查找（如 `/type`、`/meta/event`）；`~` 转义仅支持
+  `~0`（表示 `~`）与 `~1`（表示 `/`），可定位含特殊字符的键名。
+- 转义非法（如 `/a~2b`、未以 `/` 开头）时，所有样本均不参与生成并逐条标注原因，请求被拒绝（422）。
+- 空字符串 `""` 表示根节点（仅对标量样本有意义）；界面留空时不发起生成。
+
+**分组规则**：
+
+- 仅字符串、数字、布尔值参与分组；取值按类型区分——`1`、`"1"`、`true` 是三个不同分组。
+- 判别字段**缺失**，或该位置的值为**对象 / 数组 / null** 的样本不参与生成，
+  结果区按样本序号逐条列出原因。
+- 分组（及 oneOf 分支）按判别值在样本中首次出现的顺序排列。
+
+**分支 Schema 规则**：
+
+- 每个分支由该组样本经归纳引擎生成：仅**组内共同存在**的字段进入 `required`。
+- 判别字段在分支内被约束为对应 `const`（嵌套路径上的每一级都会确保进入 `required`），
+  因此各分支互斥，恰好匹配一个分支的 `oneOf` 语义成立。
+- 树形视图中判别字段节点带 `const` 徽章，样本路径标注已换算回全局样本序号。
+
+**产出与拒绝**：
+
+- 有效分组不足 2 个时拒绝产出（HTTP 422），响应仍携带分组概要与跳过明细，界面同步展示。
+- 成功时界面展示分组数量、有效样本数与各分支 Schema，可一键复制完整契约；
+  点击「在校验页验证 →」跳转到「③ 校验新样本」并以该变体契约为校验目标
+  （校验页也可随时在「归纳 Schema / 事件变体契约」之间切换校验目标）。
+- 单次最多 200 条样本；任何样本或判别字段修改都会使上次生成结果失效。
+
 ## 本地开发
 
 ```bash
@@ -169,7 +213,7 @@ npm run dev:client   # 前端 http://localhost:5173（/api 代理到 8080）
 ## 测试
 
 ```bash
-npm test             # node:test，覆盖归纳引擎、契约比较器、反例生成器、样本影响扫描、样本贡献度、HTTP API 与发布门禁（105 项）
+npm test             # node:test，覆盖归纳引擎、契约比较器、反例生成器、样本影响扫描、样本贡献度、事件变体契约、HTTP API 与发布门禁（122 项）
 ```
 
 ## API
@@ -183,6 +227,7 @@ npm test             # node:test，覆盖归纳引擎、契约比较器、反例
 | POST | `/api/counterexample` | `{ oldSchema, newSchema, perspective, kind, pointer }` | `{ constructible, sample?, oldResult: { valid, errors }, newResult: { valid, errors }, reason? }` |
 | POST | `/api/scan` | `{ oldSchema, newSchema, samples: [<any>, ...] }`（≤ 200 条） | `{ total, summary: { both, baselineOnly, currentOnly, neither }, samples: [{ index, category, baseline: { valid, errors }, current: { valid, errors } }] }` |
 | POST | `/api/contribution` | `{ samples: [<any>, ...] }`（1–50 条） | `{ total, summary: { critical, redundant }, samples: [{ index, verdict, affectedPointers }] }` |
+| POST | `/api/variant` | `{ samples: [<any>, ...], pointer: "/type" }`（≤ 200 条） | `{ pointer, totalSamples, validSamples, groupCount, groups: [{ value, count, sampleIndexes, schema, paths }], skipped: [{ index, reason }], schema: { $schema, oneOf } }`；有效分组不足 2 个或 Pointer 非法时返回 422，响应体仍携带分组概要与跳过明细 |
 
 示例：
 
@@ -230,6 +275,27 @@ curl -X POST http://localhost:8080/api/contribution \
 #        { "index": 2, "verdict": "critical",  "affectedPointers": ["/properties/tag"] } ] }
 ```
 
+按判别字段分组取值生成事件变体契约（oneOf 分支 + const 判别值）：
+
+```bash
+curl -X POST http://localhost:8080/api/variant \
+  -H 'Content-Type: application/json' \
+  -d '{"pointer":"/type","samples":[
+        {"type":"created","id":1,"payload":{"a":1}},
+        {"type":"created","id":2},
+        {"type":"deleted","id":3,"reason":"x"},
+        {"id":4}]}'
+# -> { "groupCount": 2, "validSamples": 3, "totalSamples": 4,
+#      "skipped": [{ "index": 3, "reason": "判别字段缺失" }],
+#      "groups": [
+#        { "value": "created", "count": 2, "sampleIndexes": [0, 1],
+#          "schema": { ..., "properties": { "type": { "type": "string", "const": "created" }, ... },
+#                      "required": ["type", "id"] } },
+#        { "value": "deleted", "count": 1, "sampleIndexes": [2],
+#          "schema": { ..., "required": ["type", "id", "reason"] } } ],
+#      "schema": { "$schema": ".../2020-12/schema", "oneOf": [<两个分支>] } }
+```
+
 ## 目录结构
 
 ```
@@ -242,20 +308,22 @@ curl -X POST http://localhost:8080/api/contribution \
 │   ├── counterexample.js   # 破坏性反例生成器（递归构造最小 JSON + Ajv 双侧校验）
 │   ├── scan.js             # 样本影响扫描器（Ajv 双侧逐条校验 + 四分类，单次上限 200 条）
 │   ├── contribution.js     # 样本贡献度分析（留一法重新归纳 + 规范化规则差异判定，单次上限 50 条）
-│   ├── app.js              # Express（/api/infer、/api/validate、/api/diff、/api/counterexample、/api/scan、/api/contribution、静态托管）
+│   ├── variant.js          # 事件变体契约（判别字段分组 + 逐组归纳 + const 注入，合并 oneOf，单次上限 200 条）
+│   ├── app.js              # Express（/api/infer、/api/validate、/api/diff、/api/counterexample、/api/scan、/api/contribution、/api/variant、静态托管）
 │   ├── index.js            # 入口：监听 PORT（默认 8080）
 │   └── test/               # node:test 单元与 API 测试
 └── client/
     ├── test/               # 发布门禁（SemVer 解析/比较/判定）单元测试
     └── src/
-        ├── App.jsx                 # 双栏布局、样本管理、归纳/校验/演进流程、基线（sessionStorage）
+        ├── App.jsx                 # 双栏布局、样本管理、归纳/校验/演进/变体流程、基线（sessionStorage）
         ├── gate.js                 # 发布门禁：SemVer 2.0.0 解析/比较 + 放行判定（纯函数）
-        ├── components/SchemaTree.jsx   # 树形视图 + 样本路径标注
-        ├── components/ValidatePanel.jsx # 校验面板，JSON Pointer 错误列表
+        ├── components/SchemaTree.jsx   # 树形视图 + 样本路径标注 + const 徽章
+        ├── components/ValidatePanel.jsx # 校验面板：归纳 Schema / 事件变体契约双目标，JSON Pointer 错误列表
         ├── components/DiffPanel.jsx     # 契约演进面板：视角切换、破坏性筛选、按 Pointer 分组
         ├── components/CounterexamplePanel.jsx # 反例：样本格式化展示、双侧校验结果、复制按钮
         ├── components/SampleScanPanel.jsx  # 样本影响扫描：数组输入、四分类汇总、单条双侧错误展开
         ├── components/ContributionPanel.jsx # 样本贡献度：留一法分析入口、关键/冗余汇总筛选、定位原样本
+        ├── components/VariantPanel.jsx    # 事件变体：判别 Pointer 输入、分组/跳过明细、分支 Schema、复制与接入校验
         ├── components/ReleaseGate.jsx   # 发布门禁卡片：版本输入、放行结论、报告复制
         └── components/SampleEditor.jsx  # 样本编辑器（实时 JSON 校验）
 ```

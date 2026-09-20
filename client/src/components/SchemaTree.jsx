@@ -46,6 +46,9 @@ function SchemaNode({ name, schema, pointer, paths, isRequired, depth }) {
         </button>
         <span className="schema-node__name">{name}</span>
         <TypeBadges types={types} />
+        {schema.const !== undefined && (
+          <span className="flag flag--const">const {JSON.stringify(schema.const)}</span>
+        )}
         {isRequired === true && <span className="flag flag--required">必填</span>}
         {isRequired === false && <span className="flag flag--optional">可选</span>}
         {nullable && <span className="flag flag--null">可空</span>}
